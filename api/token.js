@@ -1,15 +1,4 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
-
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-app.use(cors());
-app.use(express.json());
 
 const LIVEKIT_URL = process.env.LIVEKIT_URL
   ? process.env.LIVEKIT_URL.trim()
@@ -23,24 +12,31 @@ const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET
   ? process.env.LIVEKIT_API_SECRET.replace(/\s+/g, '')
   : '';
 
-if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_URL) {
-  console.warn(
-    'WARNING: LIVEKIT_URL, LIVEKIT_API_KEY, or LIVEKIT_API_SECRET is missing in .env'
-  );
-}
-
 /**
- * Health check
+ * Vercel Serverless Function: POST /api/token
+ * Generates a LiveKit token for USER or ADMIN roles.
  */
-app.get('/', (req, res) => {
-  res.send('Voice Test Backend is running!');
-});
+export default async function handler(req, res) {
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-/**
- * Generate LiveKit token
- * Role must be either USER or ADMIN
- */
-app.post('/api/token', async (req, res) => {
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_URL) {
+    return res.status(500).json({
+      error: 'Server misconfiguration: LiveKit environment variables missing.',
+    });
+  }
+
   try {
     const { role } = req.body;
 
@@ -50,23 +46,15 @@ app.post('/api/token', async (req, res) => {
       });
     }
 
-    const randomSuffix = Math.random()
-      .toString(36)
-      .substring(2, 7);
-
+    const randomSuffix = Math.random().toString(36).substring(2, 7);
     const identity = `${role.toLowerCase()}-${randomSuffix}`;
     const name = `${role} (${randomSuffix})`;
 
-    const at = new AccessToken(
-      LIVEKIT_API_KEY,
-      LIVEKIT_API_SECRET,
-      {
-        identity,
-        name,
-      }
-    );
+    const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+      identity,
+      name,
+    });
 
-    // USER can publish microphone audio
     if (role === 'USER') {
       at.addGrant({
         room: 'voice-test',
@@ -75,10 +63,8 @@ app.post('/api/token', async (req, res) => {
         canPublishSources: [TrackSource.MICROPHONE],
         canSubscribe: true,
       });
-    }
-
-    // ADMIN is listen-only
-    else {
+    } else {
+      // ADMIN: listen-only
       at.addGrant({
         room: 'voice-test',
         roomJoin: true,
@@ -90,26 +76,15 @@ app.post('/api/token', async (req, res) => {
 
     const token = await at.toJwt();
 
-    return res.json({
+    return res.status(200).json({
       token,
       url: LIVEKIT_URL,
       identity,
       role,
       room: 'voice-test',
     });
-
   } catch (error) {
     console.error('Error generating token:', error);
-
-    return res.status(500).json({
-      error: 'Failed to generate token',
-    });
+    return res.status(500).json({ error: 'Failed to generate token' });
   }
-});
-
-/**
- * Start server
- */
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Backend server running on port ${PORT}`);
-});
+}
